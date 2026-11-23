@@ -37,6 +37,7 @@ def test_pull_defaults():
         {"spatial_feature_group": "g1", "satellite": "suomi-npp"},
         {"spatial_feature_group": "g1", "alert_window_hours": 0},
         {"spatial_feature_group": "g1", "confidence_alert_levels": ["certain"]},
+        {"spatial_feature_group": "g1", "confidence_alert_levels": []},
     ],
 )
 def test_pull_rejects(kwargs):

@@ -19,14 +19,23 @@ from . import boundaries
 
 logger = logging.getLogger(__name__)
 
+# "earthranger" was registered by accident in the past and is still on some integrations.
+EARTHRANGER_TYPE_SLUGS = frozenset({"earth_ranger", "earthranger"})
+
+
+class DestinationUnreadable(Exception):
+    """Gundi could not return a destination's details, so its EarthRanger site was not contacted."""
+
 
 @dataclass
 class ERDestination:
     id: str
     base_url: str
-    token: Optional[str] = None
+    token: Optional[str] = field(default=None, repr=False)
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = field(default=None, repr=False)
+    # Gundi could not return this destination's details this run, so its site cannot be read.
+    unreadable: bool = False
 
 
 @dataclass
@@ -54,10 +63,13 @@ def _host(base_url: str) -> str:
 
 
 async def get_er_destinations(integration_id: str) -> List[ERDestination]:
-    """The connection's destinations that carry EarthRanger credentials.
+    """The connection's EarthRanger destinations that carry credentials.
 
-    Destinations without an auth configuration, usable credentials or a site URL are left out. Returns an empty
-    list when the integration has no destinations, or is not a provider on any connection (a 404 from Gundi).
+    Destinations of any other type are left out, so another system's credentials are never sent to EarthRanger
+    endpoints on its host. So are EarthRanger destinations without an auth configuration, usable credentials or a
+    site URL. One whose details Gundi fails to return is kept and marked `unreadable`, so that its last known
+    boundary can still be used. Returns an empty list when the integration has no destinations, or is not a
+    provider on any connection (a 404 from Gundi).
     """
     async with GundiClient() as gundi:
         try:
@@ -68,7 +80,16 @@ async def get_er_destinations(integration_id: str) -> List[ERDestination]:
             raise
         destinations = []
         for destination in connection.destinations or []:
-            details = await gundi.get_integration_details(str(destination.id))
+            if getattr(getattr(destination, "type", None), "value", None) not in EARTHRANGER_TYPE_SLUGS:
+                continue
+            try:
+                details = await gundi.get_integration_details(str(destination.id))
+            except Exception as exc:
+                logger.warning("Could not read destination %s from Gundi: %s", destination.id, type(exc).__name__)
+                destinations.append(
+                    ERDestination(str(destination.id), getattr(destination, "base_url", None) or "", unreadable=True)
+                )
+                continue
             auth_config = details.get_action_config("auth")
             data = getattr(auth_config, "data", None) or {}
             token = data.get("token") or None
@@ -135,8 +156,17 @@ async def resolve_boundary(
         except Exception as exc:
             # Exception text is left out of every warning: it can quote a URL or credentials.
             logger.warning("Could not look up EarthRanger destinations: %s", type(exc).__name__)
-            warnings.append(f"Could not look up the EarthRanger destinations ({type(exc).__name__}).")
             destinations = []
+            # Without the list of destinations, every boundary last read for this group still applies.
+            for entry in new_cache.values():
+                cached = _cached_geometry(entry, group_id)
+                if cached is not None:
+                    parts.append(cached)
+                    used_cache = True
+            warnings.append(
+                f"Could not look up the EarthRanger destinations ({type(exc).__name__})"
+                + ("; using the boundary last read from EarthRanger." if parts else ".")
+            )
         else:
             if not destinations:
                 warnings.append("No EarthRanger destination with credentials is connected to this integration.")
@@ -144,6 +174,8 @@ async def resolve_boundary(
         for destination in destinations:
             host = _host(destination.base_url)
             try:
+                if destination.unreadable:
+                    raise DestinationUnreadable()
                 geometry = boundaries.geometry_from_feature_group(await fetch_feature_group(destination, group_id))
             except Exception as exc:
                 logger.warning("Could not read the spatial feature group from %s: %s", host, type(exc).__name__)

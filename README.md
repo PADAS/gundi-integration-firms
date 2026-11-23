@@ -4,8 +4,8 @@ Sends NASA FIRMS fire detections to Gundi as `firms_rep` events. It replaces Ear
 
 Every 15 minutes the `pull_fire_detections` action reads yesterday's and today's VIIRS near-real-time day files
 for the configured region, keeps the detections that fall inside the site's boundary, and sends one event per
-detection that is confident and recent enough. It resumes each day file where the last run stopped and never
-raises the same fire twice.
+detection that is confident and recent enough. It resumes each day file where the last run stopped and keeps a
+record of the events it sent, so a fire is not raised again when NASA revises or re-publishes a detection.
 
 ## Setting it up
 

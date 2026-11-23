@@ -120,6 +120,10 @@ def _integration(base_url, auth_data):
     return SimpleNamespace(base_url=base_url, get_action_config=lambda action: config if action == "auth" else None)
 
 
+def _dest(dest_id, type_value="earth_ranger", base_url=None):
+    return SimpleNamespace(id=dest_id, type=SimpleNamespace(value=type_value), base_url=base_url)
+
+
 def _gundi(mocker, connection=None, integrations=None, connection_error=None):
     client = MagicMock()
     client.get_connection_details = AsyncMock(return_value=connection, side_effect=connection_error)
@@ -133,7 +137,7 @@ def _gundi(mocker, connection=None, integrations=None, connection_error=None):
 
 async def test_get_er_destinations_reads_both_auth_types_and_skips_the_rest(mocker):
     connection = SimpleNamespace(
-        destinations=[SimpleNamespace(id=i) for i in ("d1", "d2", "d3", "d4", "d5")]
+        destinations=[_dest(i) for i in ("d1", "d2", "d3", "d4", "d5")]
     )
     _gundi(
         mocker,
@@ -185,3 +189,58 @@ async def test_fetch_feature_group_builds_the_er_client_from_the_site_root(mocke
     assert (kwargs["username"], kwargs["password"], kwargs["token"]) == ("u", "p", None)
     assert kwargs["client_id"] == "das_web_client"
     er.get_feature_group.assert_awaited_once_with("g1")
+
+
+async def test_get_er_destinations_skips_destinations_that_are_not_earthranger(mocker):
+    """Another system's credentials must never be sent to EarthRanger endpoints on its host."""
+    connection = SimpleNamespace(
+        destinations=[_dest("er"), _dest("smart", "smart_connect"), _dest("untyped", None), _dest("old", "earthranger")]
+    )
+    connection.destinations[2].type = None
+    client = _gundi(
+        mocker,
+        connection,
+        {
+            "er": _integration("https://er.pamdas.org", {"token": "tok"}),
+            "smart": _integration("https://smart.example.org", {"username": "u", "password": "p"}),
+            "untyped": _integration("https://x.example.org", {"token": "tok"}),
+            "old": _integration("https://old.pamdas.org", {"token": "tok2"}),
+        },
+    )
+    assert await bs.get_er_destinations("i") == [
+        ERDestination("er", "https://er.pamdas.org", token="tok"),
+        ERDestination("old", "https://old.pamdas.org", token="tok2"),
+    ]
+    assert [c.args[0] for c in client.get_integration_details.await_args_list] == ["er", "old"]
+
+
+async def test_get_er_destinations_isolates_a_destination_whose_details_fail(mocker):
+    connection = SimpleNamespace(destinations=[_dest("d1", base_url="https://one.pamdas.org"), _dest("d2")])
+    client = _gundi(mocker, connection, {"d2": _integration("https://two.pamdas.org", {"token": "tok"})})
+    client.get_integration_details.side_effect = [GundiAPIError(500, "boom"), client.get_integration_details.side_effect("d2")]
+    assert await bs.get_er_destinations("i") == [
+        ERDestination("d1", "https://one.pamdas.org", unreadable=True),
+        ERDestination("d2", "https://two.pamdas.org", token="tok"),
+    ]
+
+
+async def test_unreadable_destination_contributes_its_cached_boundary(dests, fetch):
+    dests.return_value = [ERDestination("a", "https://a.pamdas.org", unreadable=True), B]
+    r = await resolve(cache={"a": {"group_id": "g1", "geometry": SQUARE2}}, fallback=None)
+    inside = b.make_filter(r.geometry)
+    assert r.source == "cached" and inside(0.5, 0.5) and inside(2.5, 2.5)
+    fetch.assert_awaited_once_with(B, "g1")
+
+
+async def test_destination_lookup_failure_uses_the_cached_boundary_before_the_fallback(dests, fetch):
+    dests.side_effect = RuntimeError("gundi down")
+    cache = {"a": {"group_id": "g1", "geometry": SQUARE}}
+    r = await resolve(cache=cache, fallback=SQUARE2)
+    inside = b.make_filter(r.geometry)
+    assert r.source == "cached" and inside(0.5, 0.5) and not inside(2.5, 2.5)
+    assert r.cache == cache and r.warnings
+
+
+async def test_destination_repr_hides_credentials():
+    text = repr(ERDestination("a", "https://a.pamdas.org", token="tok-secret", username="u", password="pw-secret"))
+    assert "tok-secret" not in text and "pw-secret" not in text

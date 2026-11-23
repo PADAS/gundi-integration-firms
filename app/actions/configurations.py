@@ -76,6 +76,7 @@ class PullFireDetectionsConfig(PullActionConfiguration):
         title="Confidence levels to report",
         description="Only detections with one of these FIRMS confidence values are reported.",
         unique_items=True,
+        min_items=1,
         ui_options=UIOptions(widget="select"),
     )
     alert_window_hours: int = FieldWithUIOptions(
