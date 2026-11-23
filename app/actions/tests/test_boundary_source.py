@@ -1,0 +1,187 @@
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
+from gundi_client_v2.errors import GundiAPIError
+
+from app.actions import boundaries as b
+from app.actions import boundary_source as bs
+from app.actions.boundary_source import ERDestination
+
+pytestmark = pytest.mark.asyncio
+
+SQUARE = {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]}
+SQUARE2 = {"type": "Polygon", "coordinates": [[[2, 2], [2, 3], [3, 3], [3, 2], [2, 2]]]}
+
+
+def fc(geom):
+    return {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": geom}]}
+
+
+GROUP = {"features": [fc(SQUARE)]}
+A = ERDestination("a", "https://a.pamdas.org", token="t")
+B = ERDestination("b", "https://b.pamdas.org", token="t")
+
+
+@pytest.fixture
+def dests(mocker):
+    return mocker.patch.object(bs, "get_er_destinations", new=AsyncMock(return_value=[A]))
+
+
+@pytest.fixture
+def fetch(mocker):
+    return mocker.patch.object(bs, "fetch_feature_group", new=AsyncMock(return_value=GROUP))
+
+
+async def resolve(group_id="g1", fallback=None, cache=None):
+    return await bs.resolve_boundary(
+        integration_id="i", group_id=group_id, fallback_area=fallback, cache=cache or {}
+    )
+
+
+async def test_live_read_wins_and_is_cached(dests, fetch):
+    r = await resolve(fallback=SQUARE2)
+    assert r.source == "earthranger" and r.warnings == []
+    assert r.cache == {"a": {"group_id": "g1", "geometry": b.to_geojson(r.geometry)}}
+    inside = b.make_filter(r.geometry)
+    assert inside(0.5, 0.5) and not inside(2.5, 2.5)
+    fetch.assert_awaited_once_with(A, "g1")
+
+
+async def test_unreachable_destination_uses_its_cache(dests, fetch):
+    fetch.side_effect = httpx.ConnectError("secret-token")
+    cache = {"a": {"group_id": "g1", "geometry": SQUARE}}
+    r = await resolve(cache=cache, fallback=SQUARE2)
+    assert r.source == "cached" and b.make_filter(r.geometry)(0.5, 0.5)
+    assert len(r.warnings) == 1 and "a.pamdas.org" in r.warnings[0] and "secret-token" not in r.warnings[0]
+    assert r.cache == cache
+
+
+async def test_cache_for_another_group_is_ignored(dests, fetch):
+    fetch.side_effect = httpx.ConnectError("x")
+    r = await resolve(cache={"a": {"group_id": "old", "geometry": SQUARE}}, fallback=SQUARE2)
+    assert r.source == "config" and b.make_filter(r.geometry)(2.5, 2.5) and "a" not in r.cache
+
+
+async def test_unreadable_cache_entry_is_ignored(dests, fetch):
+    fetch.side_effect = httpx.ConnectError("x")
+    r = await resolve(cache={"a": {"group_id": "g1", "geometry": {"type": "Nonsense"}}}, fallback=SQUARE2)
+    assert r.source == "config"
+
+
+async def test_two_destinations_union_live_and_cached(dests, fetch):
+    dests.return_value = [A, B]
+    fetch.side_effect = [GROUP, httpx.ConnectError("x")]
+    r = await resolve(cache={"b": {"group_id": "g1", "geometry": SQUARE2}})
+    inside = b.make_filter(r.geometry)
+    assert r.source == "cached" and inside(0.5, 0.5) and inside(2.5, 2.5)
+    assert set(r.cache) == {"a", "b"}
+
+
+async def test_cache_of_destination_not_seen_this_run_is_kept(dests, fetch):
+    kept = {"group_id": "g1", "geometry": SQUARE2}
+    r = await resolve(cache={"gone": kept})
+    assert r.cache["gone"] == kept and r.source == "earthranger"
+
+
+async def test_group_with_no_polygons_falls_back(dests, fetch):
+    fetch.return_value = {"features": []}
+    r = await resolve(fallback=json.dumps(SQUARE2))
+    assert r.source == "config" and r.warnings and b.make_filter(r.geometry)(2.5, 2.5)
+
+
+async def test_no_group_selected_uses_config_without_warning(dests, fetch):
+    r = await resolve(group_id=None, fallback=SQUARE2)
+    assert r.source == "config" and r.warnings == [] and fetch.await_count == 0 and dests.await_count == 0
+
+
+async def test_nothing_resolves(dests, fetch):
+    dests.return_value = []
+    r = await resolve(fallback=None)
+    assert r.geometry is None and r.source == "none" and r.warnings
+
+
+async def test_unusable_fallback_area_resolves_to_none(dests, fetch):
+    dests.return_value = []
+    r = await resolve(fallback="not json")
+    assert r.geometry is None and r.source == "none"
+
+
+async def test_destination_lookup_failure_is_not_fatal(dests, fetch):
+    dests.side_effect = RuntimeError("secret")
+    r = await resolve(fallback=SQUARE2)
+    assert r.source == "config" and r.warnings and "secret" not in " ".join(r.warnings)
+
+
+def _integration(base_url, auth_data):
+    config = SimpleNamespace(data=auth_data) if auth_data is not None else None
+    return SimpleNamespace(base_url=base_url, get_action_config=lambda action: config if action == "auth" else None)
+
+
+def _gundi(mocker, connection=None, integrations=None, connection_error=None):
+    client = MagicMock()
+    client.get_connection_details = AsyncMock(return_value=connection, side_effect=connection_error)
+    client.get_integration_details = AsyncMock(side_effect=lambda dest_id: integrations[dest_id])
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(return_value=client)
+    manager.__aexit__ = AsyncMock(return_value=False)
+    mocker.patch.object(bs, "GundiClient", return_value=manager)
+    return client
+
+
+async def test_get_er_destinations_reads_both_auth_types_and_skips_the_rest(mocker):
+    connection = SimpleNamespace(
+        destinations=[SimpleNamespace(id=i) for i in ("d1", "d2", "d3", "d4", "d5")]
+    )
+    _gundi(
+        mocker,
+        connection,
+        {
+            "d1": _integration("https://one.pamdas.org", {"authentication_type": "token", "token": "tok"}),
+            "d2": _integration(
+                "https://two.pamdas.org/",
+                {"authentication_type": "username_password", "username": "u", "password": "p", "token": ""},
+            ),
+            "d3": _integration("https://three.example.org", None),  # no auth configuration
+            "d4": _integration("https://four.example.org", {"username": "u"}),  # no usable credentials
+            "d5": _integration("", {"token": "tok"}),  # no site URL
+        },
+    )
+    assert await bs.get_er_destinations("i") == [
+        ERDestination("d1", "https://one.pamdas.org", token="tok"),
+        ERDestination("d2", "https://two.pamdas.org/", username="u", password="p"),
+    ]
+
+
+async def test_get_er_destinations_without_destinations(mocker):
+    _gundi(mocker, SimpleNamespace(destinations=None), {})
+    assert await bs.get_er_destinations("i") == []
+
+
+async def test_get_er_destinations_when_integration_is_not_a_provider(mocker):
+    _gundi(mocker, connection_error=GundiAPIError(404, "not found"))
+    assert await bs.get_er_destinations("i") == []
+
+
+async def test_get_er_destinations_propagates_other_api_errors(mocker):
+    _gundi(mocker, connection_error=GundiAPIError(500, "boom"))
+    with pytest.raises(GundiAPIError):
+        await bs.get_er_destinations("i")
+
+
+async def test_fetch_feature_group_builds_the_er_client_from_the_site_root(mocker):
+    er = MagicMock()
+    er.get_feature_group = AsyncMock(return_value=GROUP)
+    er.__aenter__ = AsyncMock(return_value=er)
+    er.__aexit__ = AsyncMock(return_value=False)
+    factory = mocker.patch.object(bs, "AsyncERClient", return_value=er)
+    dest = ERDestination("d", "https://site.pamdas.org:443/some/path", username="u", password="p")
+    assert await bs.fetch_feature_group(dest, "g1") == GROUP
+    kwargs = factory.call_args.kwargs
+    assert kwargs["service_root"] == "https://site.pamdas.org/api/v1.0"
+    assert kwargs["token_url"] == "https://site.pamdas.org/oauth2/token"
+    assert (kwargs["username"], kwargs["password"], kwargs["token"]) == ("u", "p", None)
+    assert kwargs["client_id"] == "das_web_client"
+    er.get_feature_group.assert_awaited_once_with("g1")
