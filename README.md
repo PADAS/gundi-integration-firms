@@ -1,3 +1,60 @@
+# gundi-integration-firms
+
+Sends NASA FIRMS fire detections to Gundi as `firms_rep` events. It replaces EarthRanger's built-in FIRMS plugin.
+
+Every 15 minutes the `pull_fire_detections` action reads yesterday's and today's VIIRS near-real-time day files
+for the configured region, keeps the detections that fall inside the site's boundary, and sends one event per
+detection that is confident and recent enough. It resumes each day file where the last run stopped and never
+raises the same fire twice.
+
+## Setting it up
+
+1. **App key.** Sign in at https://nrt3.modaps.eosdis.nasa.gov/, open the Profile menu and generate an app key.
+   Enter it in the Authentication action.
+2. **Connect an EarthRanger destination.** Events go there, and the boundary is read from there.
+3. **Configure Pull Fire Detections:**
+
+| Field | What it does |
+|---|---|
+| FIRMS region | The NASA region whose day files are read. |
+| Satellite | NOAA-20 (default) or NOAA-21. Suomi NPP stopped delivering in November 2026. |
+| Spatial feature group | The EarthRanger feature group whose polygons form the boundary. |
+| Fallback area | A drawn or imported polygon, used when the feature group can't be read. |
+| Confidence levels to report | Defaults to nominal and high. |
+| Alert window (hours) | Detections older than this are not reported. Defaults to 24. |
+
+At least one of the spatial feature group and the fallback area is required.
+
+## Which boundary is used
+
+Each run uses the first of these that works:
+
+1. The spatial feature group, read live from EarthRanger.
+2. The boundary last read from EarthRanger, when the site can't be reached.
+3. The fallback area.
+
+If none works, the run sends nothing and logs a warning. Unfiltered detections are never sent. A warning is also
+logged whenever a run falls back from the live read.
+
+## Prerequisites on the EarthRanger site
+
+- An event type with the value `firms_rep` must exist. Its schema should include `confidence`, `frp`,
+  `bright_ti4`, `bright_ti5`, `scan`, `track`, `reported_latitude` and `reported_longitude`. Sites that ran the
+  EarthRanger plugin already have it; other sites need it created.
+- The spatial feature group dropdown is filled by the EarthRanger integration's `list_spatial_feature_groups`
+  reference action. Without it, type the feature group's id.
+
+## What is sent
+
+Only events. Each has the title "FIRMS Fire Detected", the acquisition time, and a location rounded to three
+decimal places (about 110 m). Only rows with processing level `NRT` are used.
+
+Design: `docs/superpowers/specs/2026-11-23-firms-pull-design.md`.
+
+---
+
+The rest of this file is the action-runner template's own documentation.
+
 # gundi-integration-action-runner
 Template repo for integration in Gundi v2.
 
