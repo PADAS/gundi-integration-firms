@@ -7,6 +7,7 @@ from gundi_core.events import LogLevel
 
 from app.actions import boundaries, handlers
 from app.actions.boundary_source import ResolvedBoundary
+from app.actions.event_type import EventTypeCheck, EventTypeUnavailable
 from app.actions.client import DayResult, FirmsAuthError, FirmsFetchError, FirmsHeaderError
 from app.actions.configurations import AuthenticateConfig, PullFireDetectionsConfig
 from app.actions.core import get_actions
@@ -90,6 +91,9 @@ def env(mocker):
         log=mocker.patch.object(handlers, "log_action_activity", new=AsyncMock()),
         check=mocker.patch.object(handlers, "check_app_key", new=AsyncMock(return_value=True)),
         shared_key=mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", None),
+        ensure=mocker.patch.object(
+            handlers, "ensure_event_type_on_destinations", new=AsyncMock(return_value=EventTypeCheck())
+        ),
     )
 
 
@@ -360,6 +364,41 @@ async def test_action_auth_without_any_key(env, integration):
     result = await handlers.action_auth(integration=integration, action_config=AuthenticateConfig())
     assert result["valid_credentials"] is False and "Use your own key" in result["error"]
     assert env.check.await_count == 0
+
+
+async def test_event_type_is_checked_once_before_the_first_send(env, run):
+    order = []
+    env.ensure.side_effect = lambda integration_id: order.append("ensure") or EventTypeCheck()
+    env.send.side_effect = lambda events, **kwargs: order.append("send") or []
+    await run([rec(0.005 * i, 0.5, 1) for i in range(1, 151)])
+    assert order == ["ensure", "send", "send"]
+    env.ensure.assert_awaited_once_with(INTEGRATION_ID)
+
+
+async def test_event_type_is_not_checked_when_nothing_is_sent(env, run):
+    await run([rec(5.0, 5.0, 1)])
+    assert env.ensure.await_count == 0
+
+
+async def test_created_event_type_and_warnings_are_logged(env, run):
+    env.ensure.return_value = EventTypeCheck(created=["a.pamdas.org"], warnings=["could not check b"])
+    result = await run([rec(0.5, 0.5, 1)])
+    logged = [(c.kwargs["title"], c.kwargs["level"]) for c in env.log.await_args_list]
+    assert logged == [
+        ("Created the 'firms_rep' event type on a.pamdas.org.", LogLevel.INFO),
+        ("could not check b", LogLevel.WARNING),
+    ]
+    assert result["events_sent"] == 1
+
+
+async def test_missing_event_type_that_cannot_be_created_sends_nothing(env, run):
+    env.ensure.side_effect = EventTypeUnavailable("a.pamdas.org", "ERClientPermissionDenied")
+    with pytest.raises(IntegrationBadResponseError) as raised:
+        await run([rec(0.5, 0.5, 1)])
+    assert "a.pamdas.org" in str(raised.value)
+    assert env.send.await_count == 0
+    assert env.fake.state.get("sent_events", []) == []
+    assert str(TODAY) not in env.fake.state.get("cursors", {}).get("noaa-20", {})
 
 
 async def test_schedule_and_discovery():
