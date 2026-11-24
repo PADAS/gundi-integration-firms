@@ -27,6 +27,15 @@ class ConfidenceLevel(str, Enum):
     HIGH = "high"
 
 
+class EventPriority(str, Enum):
+    """EarthRanger's event priorities, by the colour they show as."""
+
+    GRAY = "gray"
+    GREEN = "green"
+    AMBER = "amber"
+    RED = "red"
+
+
 class AuthenticateConfig(AuthActionConfiguration, ExecutableActionMixin):
     use_own_key: bool = FieldWithUIOptions(
         False,
@@ -105,6 +114,33 @@ class PullFireDetectionsConfig(PullActionConfiguration):
         ge=1,
         le=168,
     )
+    priority_low: EventPriority = FieldWithUIOptions(
+        EventPriority.GRAY,
+        title="Priority for low confidence",
+        description="Priority of events for low-confidence detections.",
+        ui_options=UIOptions(widget="select"),
+    )
+    priority_nominal: EventPriority = FieldWithUIOptions(
+        EventPriority.GREEN,
+        title="Priority for nominal confidence",
+        description="Priority of events for nominal-confidence detections.",
+        ui_options=UIOptions(widget="select"),
+    )
+    priority_high: EventPriority = FieldWithUIOptions(
+        EventPriority.AMBER,
+        title="Priority for high confidence",
+        description="Priority of events for high-confidence detections.",
+        ui_options=UIOptions(widget="select"),
+    )
+    red_frp_threshold_mw: Optional[float] = FieldWithUIOptions(
+        50,
+        title="Red priority at fire radiative power (MW)",
+        description=(
+            "Detections with a fire radiative power at or above this many megawatts are red, whatever their "
+            "confidence. Leave empty to set priority by confidence only."
+        ),
+        gt=0,
+    )
 
     ui_global_options: GlobalUISchemaOptions = GlobalUISchemaOptions(
         order=[
@@ -114,6 +150,10 @@ class PullFireDetectionsConfig(PullActionConfiguration):
             "fallback_area",
             "confidence_alert_levels",
             "alert_window_hours",
+            "priority_low",
+            "priority_nominal",
+            "priority_high",
+            "red_frp_threshold_mw",
             "run_on_schedule",
         ],
     )
@@ -122,6 +162,12 @@ class PullFireDetectionsConfig(PullActionConfiguration):
     def _blank_group_is_unset(cls, value):
         if isinstance(value, str):
             return value.strip() or None
+        return value
+
+    @validator("red_frp_threshold_mw", pre=True)
+    def _blank_threshold_is_off(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
         return value
 
     @validator("fallback_area", pre=True)

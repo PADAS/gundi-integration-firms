@@ -23,6 +23,8 @@ record of the events it sent, so a fire is not raised again when NASA revises or
 | Fallback area | A drawn or imported polygon, used when the feature group can't be read. |
 | Confidence levels to report | Defaults to nominal and high. |
 | Alert window (hours) | Detections older than this are not reported. Defaults to 24. |
+| Priority for low / nominal / high confidence | The event priority (gray, green, amber or red) for each confidence level. Defaults to gray, green and amber. |
+| Red priority at fire radiative power (MW) | Detections at or above this fire radiative power are red, whatever their confidence. Defaults to 50. Leave empty to set priority by confidence only. |
 
 At least one of the spatial feature group and the fallback area is required.
 
