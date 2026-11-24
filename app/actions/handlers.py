@@ -172,7 +172,7 @@ async def _pull_fire_detections(integration, integration_id: str, action_config:
         return {"skipped": "no boundary", "events_sent": 0}
 
     inside = make_filter(boundary.geometry)
-    confidence_levels = {level.value for level in action_config.confidence_alert_levels}
+    confidence_levels = action_config.reported_confidence_levels
     priority_by_confidence = {
         "low": action_config.priority_low.value,
         "nominal": action_config.priority_nominal.value,
