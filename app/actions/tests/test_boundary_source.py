@@ -80,10 +80,18 @@ async def test_two_destinations_union_live_and_cached(dests, fetch):
     assert set(r.cache) == {"a", "b"}
 
 
-async def test_cache_of_destination_not_seen_this_run_is_kept(dests, fetch):
-    kept = {"group_id": "g1", "geometry": SQUARE2}
-    r = await resolve(cache={"gone": kept})
-    assert r.cache["gone"] == kept and r.source == "earthranger"
+async def test_cache_of_a_disconnected_destination_is_dropped(dests, fetch):
+    r = await resolve(cache={"gone": {"group_id": "g1", "geometry": SQUARE2}})
+    assert set(r.cache) == {"a"} and r.source == "earthranger"
+
+
+async def test_disconnected_destination_boundary_does_not_return_during_a_lookup_outage(dests, fetch):
+    cache = {"a": {"group_id": "g1", "geometry": SQUARE}, "b": {"group_id": "g1", "geometry": SQUARE2}}
+    first = await resolve(cache=cache)  # only A is still connected
+    dests.side_effect = RuntimeError("gundi down")
+    second = await resolve(cache=first.cache)
+    inside = b.make_filter(second.geometry)
+    assert second.source == "cached" and inside(0.5, 0.5) and not inside(2.5, 2.5)
 
 
 async def test_group_with_no_polygons_falls_back(dests, fetch):

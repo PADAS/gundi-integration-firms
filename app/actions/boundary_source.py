@@ -168,6 +168,10 @@ async def resolve_boundary(
                 + ("; using the boundary last read from EarthRanger." if parts else ".")
             )
         else:
+            # The lookup succeeded, so a destination it does not list is no longer connected: forget its boundary,
+            # or a later lookup outage would bring it back. One that is listed but unreadable keeps its entry.
+            connected = {destination.id for destination in destinations}
+            new_cache = {dest_id: entry for dest_id, entry in new_cache.items() if dest_id in connected}
             if not destinations:
                 warnings.append("No EarthRanger destination with credentials is connected to this integration.")
 
