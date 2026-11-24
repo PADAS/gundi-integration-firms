@@ -124,6 +124,7 @@ async def test_sends_event_for_confident_recent_detection_inside(env, run):
             "event_type": "firms_rep",
             "recorded_at": "2026-11-23T00:42:00+00:00",
             "location": {"lat": 0.512, "lon": 0.499},
+            "priority": 100,
             "event_details": {
                 "confidence": "nominal",
                 "frp": 1.9,
@@ -399,6 +400,25 @@ async def test_missing_event_type_that_cannot_be_created_sends_nothing(env, run)
     assert env.send.await_count == 0
     assert env.fake.state.get("sent_events", []) == []
     assert str(TODAY) not in env.fake.state.get("cursors", {}).get("noaa-20", {})
+
+
+async def test_priority_follows_the_configured_rules(env, run):
+    strong = rec(0.3, 0.3, 3, confidence="low")
+    strong["frp"] = 75.0
+    await run(
+        [rec(0.1, 0.1, 1, confidence="low"), rec(0.2, 0.2, 2, confidence="high"), strong, rec(0.4, 0.4, 4)],
+        confidence_alert_levels=["low", "nominal", "high"],
+        priority_nominal="amber",
+        red_frp_threshold_mw=60,
+    )
+    assert [event["priority"] for event in env.send.await_args.args[0]] == [0, 200, 300, 200]
+
+
+async def test_priority_without_the_frp_override(env, run):
+    strong = rec(0.3, 0.3, 3, confidence="high")
+    strong["frp"] = 5000.0
+    await run([strong], red_frp_threshold_mw=None)
+    assert env.send.await_args.args[0][0]["priority"] == 200
 
 
 async def test_schedule_and_discovery():

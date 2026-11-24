@@ -44,6 +44,8 @@ def test_pull_defaults():
     assert [level.value for level in cfg.confidence_alert_levels] == ["nominal", "high"]
     assert cfg.alert_window_hours == 24 and cfg.run_on_schedule is True
     assert cfg.fallback_area is None
+    assert (cfg.priority_low.value, cfg.priority_nominal.value, cfg.priority_high.value) == ("gray", "green", "amber")
+    assert cfg.red_frp_threshold_mw == 50
 
 
 @pytest.mark.parametrize(
@@ -58,6 +60,9 @@ def test_pull_defaults():
         {"spatial_feature_group": "g1", "alert_window_hours": 0},
         {"spatial_feature_group": "g1", "confidence_alert_levels": ["certain"]},
         {"spatial_feature_group": "g1", "confidence_alert_levels": []},
+        {"spatial_feature_group": "g1", "priority_high": "purple"},
+        {"spatial_feature_group": "g1", "red_frp_threshold_mw": 0},
+        {"spatial_feature_group": "g1", "red_frp_threshold_mw": -5},
     ],
 )
 def test_pull_rejects(kwargs):
@@ -104,5 +109,22 @@ def test_ui_schema_reference_and_widget():
         "fallback_area",
         "confidence_alert_levels",
         "alert_window_hours",
+        "priority_low",
+        "priority_nominal",
+        "priority_high",
+        "red_frp_threshold_mw",
         "run_on_schedule",
     ]
+    for name in ("priority_low", "priority_nominal", "priority_high"):
+        assert ui[name]["ui:widget"] == "select"
+
+
+def test_frp_threshold_can_be_turned_off():
+    for blank in (None, ""):
+        cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", red_frp_threshold_mw=blank)
+        assert cfg.red_frp_threshold_mw is None
+
+
+def test_priority_choices_are_the_four_colours():
+    schema = PullFireDetectionsConfig.schema()
+    assert schema["definitions"]["EventPriority"]["enum"] == ["gray", "green", "amber", "red"]
