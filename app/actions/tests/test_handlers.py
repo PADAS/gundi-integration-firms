@@ -410,15 +410,15 @@ async def test_priority_follows_the_configured_rules(env, run):
         [rec(0.1, 0.1, 1, confidence="low"), rec(0.2, 0.2, 2, confidence="high"), strong, rec(0.4, 0.4, 4)],
         minimum_confidence="low",
         priority_nominal="amber",
-        red_frp_threshold_mw=60,
+        red_frp_threshold_mw=75,
     )
     assert [event["priority"] for event in env.send.await_args.args[0]] == [0, 200, 300, 200]
 
 
-async def test_priority_without_the_frp_override(env, run):
+async def test_fire_below_the_chosen_threshold_keeps_its_confidence_priority(env, run):
     strong = rec(0.3, 0.3, 3, confidence="high")
-    strong["frp"] = 5000.0
-    await run([strong], red_frp_threshold_mw=None)
+    strong["frp"] = 199.9
+    await run([strong], red_frp_threshold_mw=200)
     assert env.send.await_args.args[0][0]["priority"] == 200
 
 
