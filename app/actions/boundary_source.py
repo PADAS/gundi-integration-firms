@@ -57,8 +57,8 @@ def _site_root(base_url: str) -> Optional[str]:
     return f"{parsed.scheme}://{parsed.hostname}"
 
 
-def _host(base_url: str) -> str:
-    # Only the hostname goes into messages: a URL can carry a token in its path or query.
+def host_of(base_url: str) -> str:
+    """The hostname to name a site by in messages. Never the URL: it can carry a token in its path or query."""
     return urlparse(base_url or "").hostname or "an EarthRanger destination"
 
 
@@ -106,10 +106,10 @@ async def get_er_destinations(integration_id: str) -> List[ERDestination]:
         return destinations
 
 
-async def fetch_feature_group(destination: ERDestination, group_id: str) -> dict:
-    """The spatial feature group's detail payload (including its features) from one EarthRanger site."""
+def er_client(destination: ERDestination) -> AsyncERClient:
+    """An EarthRanger client for one destination, to be used as an async context manager."""
     site_root = _site_root(destination.base_url)
-    client = AsyncERClient(
+    return AsyncERClient(
         service_root=f"{site_root}/api/v1.0",
         username=destination.username,
         password=destination.password,
@@ -117,8 +117,12 @@ async def fetch_feature_group(destination: ERDestination, group_id: str) -> dict
         token_url=f"{site_root}/oauth2/token",
         client_id="das_web_client",
     )
-    async with client as er_client:
-        return await er_client.get_feature_group(group_id)
+
+
+async def fetch_feature_group(destination: ERDestination, group_id: str) -> dict:
+    """The spatial feature group's detail payload (including its features) from one EarthRanger site."""
+    async with er_client(destination) as client:
+        return await client.get_feature_group(group_id)
 
 
 def _cached_geometry(entry: Any, group_id: str) -> Optional[BaseGeometry]:
@@ -176,7 +180,7 @@ async def resolve_boundary(
                 warnings.append("No EarthRanger destination with credentials is connected to this integration.")
 
         for destination in destinations:
-            host = _host(destination.base_url)
+            host = host_of(destination.base_url)
             try:
                 if destination.unreadable:
                     raise DestinationUnreadable()

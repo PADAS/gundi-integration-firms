@@ -27,6 +27,7 @@ from .client import (
 )
 from .configurations import AuthenticateConfig, PullFireDetectionsConfig
 from .core import action_title
+from .event_type import EVENT_TYPE_VALUE, EventTypeUnavailable, ensure_event_type_on_destinations
 from .dedupe import LOCATION_PRECISION, SentEvents
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ PULL_ACTION_ID = "pull_fire_detections"
 RUN_LOCK_ID = f"{PULL_ACTION_ID}_lock"
 # Longer than the runner's MAX_ACTION_EXECUTION_TIME (9 minutes), so a lease outlives the run that holds it.
 RUN_LOCK_TTL_SECONDS = 600
-EVENT_TYPE = "firms_rep"
+EVENT_TYPE = EVENT_TYPE_VALUE
 EVENT_TITLE = "FIRMS Fire Detected"
 EVENT_DETAIL_FIELDS = ("confidence", "frp", "bright_ti4", "bright_ti5", "scan", "track")
 ACCEPTED_PROCESSING_LEVEL = "NRT"
@@ -102,6 +103,24 @@ def _as_event(record: dict) -> dict:
         },
         "event_details": details,
     }
+
+
+async def _ensure_event_type(integration_id: str) -> None:
+    try:
+        check = await ensure_event_type_on_destinations(integration_id)
+    except EventTypeUnavailable as exc:
+        raise IntegrationBadResponseError(str(exc)) from None
+    for host in check.created:
+        await log_action_activity(
+            integration_id=integration_id,
+            action_id=PULL_ACTION_ID,
+            title=f"Created the '{EVENT_TYPE_VALUE}' event type on {host}.",
+            level=LogLevel.INFO,
+        )
+    for warning in check.warnings:
+        await log_action_activity(
+            integration_id=integration_id, action_id=PULL_ACTION_ID, title=warning, level=LogLevel.WARNING
+        )
 
 
 @action_title("Pull Fire Detections")
@@ -170,6 +189,7 @@ async def _pull_fire_detections(integration, integration_id: str, action_config:
     stats = FirmsStats()
     counts = {"events_sent": 0, "events_deduplicated": 0, "outside_area": 0, "skipped_processing_level": 0}
     failures = []
+    event_type_checked = False
 
     try:
         for day in window:
@@ -208,6 +228,11 @@ async def _pull_fire_detections(integration, integration_id: str, action_config:
                 pending.append(record)
 
             for batch in generate_batches(pending, EVENTS_BATCH_SIZE):
+                if not event_type_checked:
+                    # Before anything is handed over: a site without the event type rejects every event, and
+                    # an event handed to Gundi is not sent again.
+                    await _ensure_event_type(integration_id)
+                    event_type_checked = True
                 await send_events_to_gundi([_as_event(record) for record in batch], integration_id=integration_id)
                 for record in batch:
                     sent.add(record["recorded_at"], record["latitude"], record["longitude"])

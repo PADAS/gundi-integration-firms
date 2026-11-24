@@ -39,9 +39,13 @@ logged whenever a run falls back from the live read.
 
 ## Prerequisites on the EarthRanger site
 
-- An event type with the value `firms_rep` must exist. Its schema should include `confidence`, `frp`,
-  `bright_ti4`, `bright_ti5`, `scan`, `track`, `reported_latitude` and `reported_longitude`. Sites that ran the
-  EarthRanger plugin already have it; other sites need it created.
+- Events use the `firms_rep` event type. Before a run sends events, it checks each EarthRanger destination and
+  creates the type where it is missing ("FIRMS Report", in the Analyzer Events category), with the same fields
+  the EarthRanger plugin uses. If the type is missing and can't be created, for example because the
+  destination's account may not add event types, the run sends nothing and fails with an error naming the site;
+  the detections are picked up again on the next run.
+- An existing `firms_rep` type is left as it is. Its schema should include `confidence`, `frp`, `bright_ti4`,
+  `bright_ti5`, `scan`, `track`, `reported_latitude` and `reported_longitude`.
 - The spatial feature group dropdown is filled by the EarthRanger integration's `list_spatial_feature_groups`
   reference action. Without it, type the feature group's id.
 
