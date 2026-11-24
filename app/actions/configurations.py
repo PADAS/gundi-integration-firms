@@ -40,6 +40,15 @@ class EventPriority(str, Enum):
     RED = "red"
 
 
+class RedFrpThreshold(int, Enum):
+    """The fire radiative powers, in megawatts, a detection can be made red at."""
+
+    MW_50 = 50
+    MW_75 = 75
+    MW_100 = 100
+    MW_200 = 200
+
+
 class AuthenticateConfig(AuthActionConfiguration, ExecutableActionMixin):
     use_own_key: bool = FieldWithUIOptions(
         False,
@@ -135,14 +144,15 @@ class PullFireDetectionsConfig(PullActionConfiguration):
         description="Priority of events for high-confidence detections.",
         ui_options=UIOptions(widget="select"),
     )
-    red_frp_threshold_mw: Optional[float] = FieldWithUIOptions(
-        50,
-        title="Red priority at fire radiative power (MW)",
+    red_frp_threshold_mw: RedFrpThreshold = FieldWithUIOptions(
+        RedFrpThreshold.MW_50,
+        title="Red priority at fire radiative power",
         description=(
-            "Detections with a fire radiative power at or above this many megawatts are red, whatever their "
-            "confidence. Leave empty to set priority by confidence only."
+            "Detections with a fire radiative power at or above this are red, whatever their confidence. "
+            "Choose the highest value to keep red for the very strongest fires only."
         ),
-        gt=0,
+        # A portal without the slider widget shows these values as a dropdown.
+        ui_options=UIOptions(widget="slider", enumNames=[f"{level.value} MW" for level in RedFrpThreshold]),
     )
 
     ui_global_options: GlobalUISchemaOptions = GlobalUISchemaOptions(
@@ -184,10 +194,16 @@ class PullFireDetectionsConfig(PullActionConfiguration):
         return set(CONFIDENCE_ORDER[CONFIDENCE_ORDER.index(self.minimum_confidence.value):])
 
     @validator("red_frp_threshold_mw", pre=True)
-    def _blank_threshold_is_off(cls, value):
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
+    def _read_a_threshold_saved_before_the_slider(cls, value):
+        """Thresholds used to be free numbers, and empty turned the rule off. Read those as the nearest choice."""
+        choices = [level.value for level in RedFrpThreshold]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return choices[-1]
+        try:
+            number = float(getattr(value, "value", value))
+        except (TypeError, ValueError):
+            return value
+        return min(choices, key=lambda choice: (abs(choice - number), choice))
 
     @validator("fallback_area", pre=True)
     def _area_as_json_text(cls, value):

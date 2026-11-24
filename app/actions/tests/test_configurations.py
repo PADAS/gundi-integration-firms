@@ -46,7 +46,7 @@ def test_pull_defaults():
     assert cfg.alert_window_hours == 24 and cfg.run_on_schedule is True
     assert cfg.fallback_area is None
     assert (cfg.priority_low.value, cfg.priority_nominal.value, cfg.priority_high.value) == ("gray", "green", "amber")
-    assert cfg.red_frp_threshold_mw == 50
+    assert cfg.red_frp_threshold_mw == 50 and isinstance(cfg.red_frp_threshold_mw.value, int)
 
 
 @pytest.mark.parametrize(
@@ -62,8 +62,7 @@ def test_pull_defaults():
         {"spatial_feature_group": "g1", "minimum_confidence": "certain"},
         {"spatial_feature_group": "g1", "minimum_confidence": ""},
         {"spatial_feature_group": "g1", "priority_high": "purple"},
-        {"spatial_feature_group": "g1", "red_frp_threshold_mw": 0},
-        {"spatial_feature_group": "g1", "red_frp_threshold_mw": -5},
+        {"spatial_feature_group": "g1", "red_frp_threshold_mw": "strong"},
     ],
 )
 def test_pull_rejects(kwargs):
@@ -120,10 +119,29 @@ def test_ui_schema_reference_and_widget():
         assert ui[name]["ui:widget"] == "select"
 
 
-def test_frp_threshold_can_be_turned_off():
-    for blank in (None, ""):
-        cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", red_frp_threshold_mw=blank)
-        assert cfg.red_frp_threshold_mw is None
+def test_frp_threshold_is_a_slider_over_fixed_values():
+    schema = PullFireDetectionsConfig.schema()
+    assert schema["definitions"]["RedFrpThreshold"]["enum"] == [50, 75, 100, 200]
+    assert schema["definitions"]["RedFrpThreshold"]["type"] == "integer"
+    ui = PullFireDetectionsConfig.ui_schema()["red_frp_threshold_mw"]
+    assert ui["ui:widget"] == "slider"
+    assert ui["ui:enumNames"] == ["50 MW", "75 MW", "100 MW", "200 MW"]
+
+
+@pytest.mark.parametrize("value", [50, 75, 100, 200, 75.0, "100"])
+def test_frp_threshold_accepts_the_slider_values(value):
+    cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", red_frp_threshold_mw=value)
+    assert cfg.red_frp_threshold_mw == int(float(value))
+
+
+@pytest.mark.parametrize(
+    "stored,read_as",
+    [(None, 200), ("", 200), (60, 50), (62.5, 50), (63, 75), (90, 100), (150, 100), (151, 200), (5000, 200), (1, 50)],
+)
+def test_a_threshold_saved_before_the_slider_reads_as_the_nearest_value(stored, read_as):
+    """An empty threshold used to turn the rule off; the highest value is the closest there is to that now."""
+    cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", red_frp_threshold_mw=stored)
+    assert cfg.red_frp_threshold_mw == read_as
 
 
 def test_priority_choices_are_the_four_colours():

@@ -251,7 +251,7 @@ async def _pull_fire_detections(integration, integration_id: str, action_config:
                             record.get("confidence"),
                             record.get("frp"),
                             by_confidence=priority_by_confidence,
-                            red_frp_threshold=action_config.red_frp_threshold_mw,
+                            red_frp_threshold=action_config.red_frp_threshold_mw.value,
                         ),
                     )
                     for record in batch
