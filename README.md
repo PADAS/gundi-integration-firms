@@ -9,8 +9,9 @@ record of the events it sent, so a fire is not raised again when NASA revises or
 
 ## Setting it up
 
-1. **App key.** Sign in at https://nrt3.modaps.eosdis.nasa.gov/, open the Profile menu and generate an app key.
-   Enter it in the Authentication action.
+1. **App key.** Nothing to do by default: the service uses a shared NASA Earthdata app key, set in its
+   `FIRMS_APP_KEY` environment variable. To use your own, turn on "Use your own key" in the Authentication
+   action and enter it. Generate one at https://nrt3.modaps.eosdis.nasa.gov/, under the Profile menu.
 2. **Connect an EarthRanger destination.** Events go there, and the boundary is read from there.
 3. **Configure Pull Fire Detections:**
 

@@ -126,8 +126,11 @@ which boundary was used and why.
 ### Config the portal user sees
 
 **Auth action**
-- `app_key`: NASA Earthdata app key, `SecretStr`, password widget. The auth
-  action checks it with a small request against today's `Global` NOAA-20 file,
+- `use_own_key`: boolean, off by default. Off means the service's shared key
+  (the `FIRMS_APP_KEY` environment variable) is used. *(added 2026-11-24)*
+- `app_key`: NASA Earthdata app key, optional `SecretStr`, password widget.
+  Required only when `use_own_key` is on. The auth action checks the key in
+  use with a small request against today's `Global` NOAA-20 file,
   since region and product live on the pull config. An HTML body or 401/403
   means invalid; a 404 means the key was accepted. *(my call)*
 

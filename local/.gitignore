@@ -1,2 +1,4 @@
-.env.local
+# Per-environment settings hold client secrets. Only the example is tracked.
+.env.*
+!.env.local.example
 docker-compose.override.yml

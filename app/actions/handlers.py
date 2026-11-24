@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from gundi_core.events import LogLevel
 
+from app import settings
 from app.services.action_scheduler import crontab_schedule
 from app.services.activity_logger import activity_logger, log_action_activity
 from app.services.errors import IntegrationAuthError, IntegrationBadResponseError, IntegrationConnectionError
@@ -49,10 +50,24 @@ def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+NO_APP_KEY_MESSAGE = "No shared NASA Earthdata app key is available. Turn on 'Use your own key' and enter one."
+
+
+def _app_key(auth_config: AuthenticateConfig) -> str:
+    """The integration's own key when it uses one, otherwise the deployment's shared key."""
+    if auth_config.use_own_key:
+        return auth_config.app_key.get_secret_value()
+    if settings.FIRMS_APP_KEY:
+        return settings.FIRMS_APP_KEY
+    raise IntegrationAuthError(NO_APP_KEY_MESSAGE)
+
+
 @action_title("Authentication")
 async def action_auth(integration, action_config: AuthenticateConfig):
     try:
-        valid = await check_app_key(action_config.app_key.get_secret_value())
+        valid = await check_app_key(_app_key(action_config))
+    except IntegrationAuthError:
+        return {"valid_credentials": False, "error": NO_APP_KEY_MESSAGE}
     except FirmsFetchError:
         return {"valid_credentials": False, "error": "Could not reach NASA FIRMS to check the app key."}
     if not valid:
@@ -61,12 +76,14 @@ async def action_auth(integration, action_config: AuthenticateConfig):
 
 
 def _stored_app_key(integration) -> str:
-    auth_config = find_config_for_action(configurations=integration.configurations, action_id="auth")
+    stored = find_config_for_action(configurations=integration.configurations, action_id="auth")
     try:
-        return AuthenticateConfig.parse_obj(auth_config.data).app_key.get_secret_value()
+        # An integration with no stored authentication uses the shared key.
+        auth_config = AuthenticateConfig.parse_obj(getattr(stored, "data", None) or {})
     except Exception:
         # The reason is left out: a validation message can quote the submitted values.
         raise IntegrationAuthError("The NASA Earthdata app key is not configured.") from None
+    return _app_key(auth_config)
 
 
 def _as_event(record: dict) -> dict:
