@@ -1,6 +1,6 @@
 import json
 from enum import Enum
-from typing import List, Optional
+from typing import Optional, Set
 
 from pydantic import SecretStr, root_validator, validator
 
@@ -25,6 +25,10 @@ class ConfidenceLevel(str, Enum):
     LOW = "low"
     NOMINAL = "nominal"
     HIGH = "high"
+
+
+# FIRMS confidence values, lowest first.
+CONFIDENCE_ORDER = tuple(level.value for level in ConfidenceLevel)
 
 
 class EventPriority(str, Enum):
@@ -99,13 +103,12 @@ class PullFireDetectionsConfig(PullActionConfiguration):
         ),
         ui_options=UIOptions(widget="polygon"),
     )
-    confidence_alert_levels: List[ConfidenceLevel] = FieldWithUIOptions(
-        [ConfidenceLevel.NOMINAL, ConfidenceLevel.HIGH],
-        title="Confidence levels to report",
-        description="Only detections with one of these FIRMS confidence values are reported.",
-        unique_items=True,
-        min_items=1,
-        ui_options=UIOptions(widget="select"),
+    minimum_confidence: ConfidenceLevel = FieldWithUIOptions(
+        ConfidenceLevel.NOMINAL,
+        title="Minimum confidence",
+        description="Only detections with at least this FIRMS confidence are reported.",
+        # A portal without the slider widget shows these choices as a dropdown.
+        ui_options=UIOptions(widget="slider", enumNames=["Low", "Nominal", "High"]),
     )
     alert_window_hours: int = FieldWithUIOptions(
         24,
@@ -148,7 +151,7 @@ class PullFireDetectionsConfig(PullActionConfiguration):
             "satellite",
             "spatial_feature_group",
             "fallback_area",
-            "confidence_alert_levels",
+            "minimum_confidence",
             "alert_window_hours",
             "priority_low",
             "priority_nominal",
@@ -163,6 +166,22 @@ class PullFireDetectionsConfig(PullActionConfiguration):
         if isinstance(value, str):
             return value.strip() or None
         return value
+
+    @root_validator(pre=True)
+    def _read_the_old_confidence_list(cls, values):
+        """Configurations saved before `minimum_confidence` hold a list of levels: use the lowest one in it."""
+        values = dict(values)
+        levels = values.pop("confidence_alert_levels", None)
+        if "minimum_confidence" not in values and isinstance(levels, (list, tuple)):
+            chosen = [level for level in CONFIDENCE_ORDER if level in [getattr(v, "value", v) for v in levels]]
+            if chosen:
+                values["minimum_confidence"] = chosen[0]
+        return values
+
+    @property
+    def reported_confidence_levels(self) -> Set[str]:
+        """The FIRMS confidence values that are reported: the minimum and every level above it."""
+        return set(CONFIDENCE_ORDER[CONFIDENCE_ORDER.index(self.minimum_confidence.value):])
 
     @validator("red_frp_threshold_mw", pre=True)
     def _blank_threshold_is_off(cls, value):
