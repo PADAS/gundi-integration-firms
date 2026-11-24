@@ -28,16 +28,35 @@ class ConfidenceLevel(str, Enum):
 
 
 class AuthenticateConfig(AuthActionConfiguration, ExecutableActionMixin):
-    app_key: SecretStr = FieldWithUIOptions(
-        ...,
+    use_own_key: bool = FieldWithUIOptions(
+        False,
+        title="Use your own key",
+        description="Leave off to use the shared NASA Earthdata app key. Turn on to enter your own below.",
+    )
+    app_key: Optional[SecretStr] = FieldWithUIOptions(
+        None,
         title="NASA Earthdata app key",
         description=(
-            "Token used to download FIRMS data. Sign in at https://nrt3.modaps.eosdis.nasa.gov/, "
+            "Only needed when you use your own key. Sign in at https://nrt3.modaps.eosdis.nasa.gov/, "
             "open the Profile menu and generate an app key."
         ),
         format="password",
         ui_options=UIOptions(widget="password"),
     )
+
+    ui_global_options: GlobalUISchemaOptions = GlobalUISchemaOptions(order=["use_own_key", "app_key"])
+
+    @validator("app_key", pre=True)
+    def _blank_key_is_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @root_validator(skip_on_failure=True)
+    def _own_key_needs_a_key(cls, values):
+        if values.get("use_own_key") and values.get("app_key") is None:
+            raise ValueError("Enter your NASA Earthdata app key, or turn off 'Use your own key'.")
+        return values
 
 
 class PullFireDetectionsConfig(PullActionConfiguration):

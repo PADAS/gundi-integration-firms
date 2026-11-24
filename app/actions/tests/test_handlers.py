@@ -68,7 +68,7 @@ class FakeStateManager:
 
 @pytest.fixture
 def integration():
-    auth = SimpleNamespace(action=SimpleNamespace(value="auth"), data={"app_key": "the-key"})
+    auth = SimpleNamespace(action=SimpleNamespace(value="auth"), data={"use_own_key": True, "app_key": "the-key"})
     return SimpleNamespace(id=INTEGRATION_ID, configurations=[auth])
 
 
@@ -89,6 +89,7 @@ def env(mocker):
         send=mocker.patch.object(handlers, "send_events_to_gundi", new=AsyncMock(return_value=[])),
         log=mocker.patch.object(handlers, "log_action_activity", new=AsyncMock()),
         check=mocker.patch.object(handlers, "check_app_key", new=AsyncMock(return_value=True)),
+        shared_key=mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", None),
     )
 
 
@@ -299,8 +300,29 @@ async def test_more_than_100_events_are_sent_in_batches(env, run):
     assert result["events_sent"] == 196
 
 
-async def test_missing_app_key_is_an_auth_error(env, run, integration):
-    integration.configurations = []
+@pytest.mark.parametrize("auth_data", [None, {}, {"use_own_key": False, "app_key": "ignored"}])
+async def test_shared_key_is_used_unless_the_integration_uses_its_own(env, run, integration, mocker, auth_data):
+    mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", "shared-key")
+    if auth_data is None:
+        integration.configurations = []
+    else:
+        integration.configurations[0].data = auth_data
+    await run([])
+    assert env.fetch.await_args_list[0].kwargs["app_key"] == "shared-key"
+
+
+async def test_own_key_wins_over_the_shared_key(env, run, mocker):
+    mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", "shared-key")
+    await run([])
+    assert env.fetch.await_args_list[0].kwargs["app_key"] == "the-key"
+
+
+@pytest.mark.parametrize("auth_data", [None, {}, {"use_own_key": True}])
+async def test_no_usable_app_key_is_an_auth_error(env, run, integration, auth_data):
+    if auth_data is None:
+        integration.configurations = []
+    else:
+        integration.configurations[0].data = auth_data
     with pytest.raises(IntegrationAuthError):
         await run([])
     assert env.fetch.await_count == 0
@@ -322,9 +344,22 @@ async def test_action_auth(env, integration, outcome, expected):
         env.check.side_effect = outcome
     else:
         env.check.return_value = outcome
-    result = await handlers.action_auth(integration=integration, action_config=AuthenticateConfig(app_key="k"))
-    assert result == expected
+    config = AuthenticateConfig(use_own_key=True, app_key="k")
+    assert await handlers.action_auth(integration=integration, action_config=config) == expected
     env.check.assert_awaited_once_with("k")
+
+
+async def test_action_auth_checks_the_shared_key(env, integration, mocker):
+    mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", "shared-key")
+    result = await handlers.action_auth(integration=integration, action_config=AuthenticateConfig())
+    assert result == {"valid_credentials": True}
+    env.check.assert_awaited_once_with("shared-key")
+
+
+async def test_action_auth_without_any_key(env, integration):
+    result = await handlers.action_auth(integration=integration, action_config=AuthenticateConfig())
+    assert result["valid_credentials"] is False and "Use your own key" in result["error"]
+    assert env.check.await_count == 0
 
 
 async def test_schedule_and_discovery():

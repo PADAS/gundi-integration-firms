@@ -8,14 +8,34 @@ from app.actions.configurations import AuthenticateConfig, PullFireDetectionsCon
 SQUARE = {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]}
 
 
+def test_auth_defaults_to_the_shared_key():
+    config = AuthenticateConfig()
+    assert config.use_own_key is False and config.app_key is None
+
+
 def test_auth_key_is_secret():
-    config = AuthenticateConfig(app_key="abc")
+    config = AuthenticateConfig(use_own_key=True, app_key="abc")
     assert "abc" not in repr(config) and config.app_key.get_secret_value() == "abc"
 
 
-def test_auth_key_renders_as_a_password():
-    assert AuthenticateConfig.ui_schema()["app_key"]["ui:widget"] == "password"
-    assert AuthenticateConfig.schema()["properties"]["app_key"]["format"] == "password"
+def test_own_key_is_required_when_using_your_own():
+    for kwargs in ({"use_own_key": True}, {"use_own_key": True, "app_key": "  "}):
+        with pytest.raises(pydantic.ValidationError):
+            AuthenticateConfig(**kwargs)
+
+
+def test_blank_key_from_the_portal_counts_as_unset():
+    assert AuthenticateConfig(app_key="").app_key is None
+
+
+def test_auth_form_layout():
+    ui = AuthenticateConfig.ui_schema()
+    assert ui["app_key"]["ui:widget"] == "password"
+    assert ui["ui:order"] == ["use_own_key", "app_key"]
+    schema = AuthenticateConfig.schema()
+    assert schema["properties"]["app_key"]["format"] == "password"
+    assert schema["properties"]["use_own_key"]["title"] == "Use your own key"
+    assert "required" not in schema
 
 
 def test_pull_defaults():
