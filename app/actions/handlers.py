@@ -1,6 +1,7 @@
 import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from gundi_core.events import LogLevel
 
@@ -27,8 +28,9 @@ from .client import (
 )
 from .configurations import AuthenticateConfig, PullFireDetectionsConfig
 from .core import action_title
-from .event_type import EVENT_TYPE_VALUE, EventTypeUnavailable, ensure_event_type_on_destinations
 from .dedupe import LOCATION_PRECISION, SentEvents
+from .event_type import EVENT_TYPE_VALUE, EventTypeUnavailable, ensure_event_type_on_destinations
+from .priority import event_priority
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +89,12 @@ def _stored_app_key(integration) -> str:
     return _app_key(auth_config)
 
 
-def _as_event(record: dict) -> dict:
+def _as_event(record: dict, priority: Optional[int] = None) -> dict:
     latitude, longitude = record["latitude"], record["longitude"]
     details = {name: record[name] for name in EVENT_DETAIL_FIELDS if name in record}
     details["reported_latitude"] = latitude
     details["reported_longitude"] = longitude
-    return {
+    event = {
         "title": EVENT_TITLE,
         "event_type": EVENT_TYPE,
         "recorded_at": record["recorded_at"].isoformat(),
@@ -103,6 +105,10 @@ def _as_event(record: dict) -> dict:
         },
         "event_details": details,
     }
+    if priority is not None:
+        # Left out, EarthRanger applies the event type's default priority.
+        event["priority"] = priority
+    return event
 
 
 async def _ensure_event_type(integration_id: str) -> None:
@@ -166,7 +172,12 @@ async def _pull_fire_detections(integration, integration_id: str, action_config:
         return {"skipped": "no boundary", "events_sent": 0}
 
     inside = make_filter(boundary.geometry)
-    confidence_levels = {level.value for level in action_config.confidence_alert_levels}
+    confidence_levels = action_config.reported_confidence_levels
+    priority_by_confidence = {
+        "low": action_config.priority_low.value,
+        "nominal": action_config.priority_nominal.value,
+        "high": action_config.priority_high.value,
+    }
     alert_window = timedelta(hours=action_config.alert_window_hours)
     alert_window_start = now - alert_window
 
@@ -233,7 +244,19 @@ async def _pull_fire_detections(integration, integration_id: str, action_config:
                     # an event handed to Gundi is not sent again.
                     await _ensure_event_type(integration_id)
                     event_type_checked = True
-                await send_events_to_gundi([_as_event(record) for record in batch], integration_id=integration_id)
+                events = [
+                    _as_event(
+                        record,
+                        event_priority(
+                            record.get("confidence"),
+                            record.get("frp"),
+                            by_confidence=priority_by_confidence,
+                            red_frp_threshold=action_config.red_frp_threshold_mw,
+                        ),
+                    )
+                    for record in batch
+                ]
+                await send_events_to_gundi(events, integration_id=integration_id)
                 for record in batch:
                     sent.add(record["recorded_at"], record["latitude"], record["longitude"])
                 counts["events_sent"] += len(batch)

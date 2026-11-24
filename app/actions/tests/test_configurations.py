@@ -41,9 +41,12 @@ def test_auth_form_layout():
 def test_pull_defaults():
     cfg = PullFireDetectionsConfig(region="Southern_Africa", spatial_feature_group="g1")
     assert cfg.satellite.value == "noaa-20"
-    assert [level.value for level in cfg.confidence_alert_levels] == ["nominal", "high"]
+    assert cfg.minimum_confidence.value == "nominal"
+    assert cfg.reported_confidence_levels == {"nominal", "high"}
     assert cfg.alert_window_hours == 24 and cfg.run_on_schedule is True
     assert cfg.fallback_area is None
+    assert (cfg.priority_low.value, cfg.priority_nominal.value, cfg.priority_high.value) == ("gray", "green", "amber")
+    assert cfg.red_frp_threshold_mw == 50
 
 
 @pytest.mark.parametrize(
@@ -56,8 +59,11 @@ def test_pull_defaults():
         {"spatial_feature_group": "g1", "fallback_area": "not json"},
         {"spatial_feature_group": "g1", "satellite": "suomi-npp"},
         {"spatial_feature_group": "g1", "alert_window_hours": 0},
-        {"spatial_feature_group": "g1", "confidence_alert_levels": ["certain"]},
-        {"spatial_feature_group": "g1", "confidence_alert_levels": []},
+        {"spatial_feature_group": "g1", "minimum_confidence": "certain"},
+        {"spatial_feature_group": "g1", "minimum_confidence": ""},
+        {"spatial_feature_group": "g1", "priority_high": "purple"},
+        {"spatial_feature_group": "g1", "red_frp_threshold_mw": 0},
+        {"spatial_feature_group": "g1", "red_frp_threshold_mw": -5},
     ],
 )
 def test_pull_rejects(kwargs):
@@ -102,7 +108,64 @@ def test_ui_schema_reference_and_widget():
         "satellite",
         "spatial_feature_group",
         "fallback_area",
-        "confidence_alert_levels",
+        "minimum_confidence",
         "alert_window_hours",
+        "priority_low",
+        "priority_nominal",
+        "priority_high",
+        "red_frp_threshold_mw",
         "run_on_schedule",
     ]
+    for name in ("priority_low", "priority_nominal", "priority_high"):
+        assert ui[name]["ui:widget"] == "select"
+
+
+def test_frp_threshold_can_be_turned_off():
+    for blank in (None, ""):
+        cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", red_frp_threshold_mw=blank)
+        assert cfg.red_frp_threshold_mw is None
+
+
+def test_priority_choices_are_the_four_colours():
+    schema = PullFireDetectionsConfig.schema()
+    assert schema["definitions"]["EventPriority"]["enum"] == ["gray", "green", "amber", "red"]
+
+
+@pytest.mark.parametrize(
+    "minimum,reported",
+    [("low", {"low", "nominal", "high"}), ("nominal", {"nominal", "high"}), ("high", {"high"})],
+)
+def test_minimum_confidence_reports_that_level_and_above(minimum, reported):
+    cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", minimum_confidence=minimum)
+    assert cfg.reported_confidence_levels == reported
+
+
+def test_minimum_confidence_is_a_labelled_slider():
+    ui = PullFireDetectionsConfig.ui_schema()["minimum_confidence"]
+    assert ui["ui:widget"] == "slider" and ui["ui:enumNames"] == ["Low", "Nominal", "High"]
+    schema = PullFireDetectionsConfig.schema()
+    assert schema["definitions"]["ConfidenceLevel"]["enum"] == ["low", "nominal", "high"]
+    assert "confidence_alert_levels" not in schema["properties"]
+
+
+@pytest.mark.parametrize(
+    "stored,minimum",
+    [(["nominal", "high"], "nominal"), (["high", "low"], "low"), (["high"], "high"), (["low", "high"], "low")],
+)
+def test_a_configuration_saved_with_the_old_level_list_reads_as_its_lowest_level(stored, minimum):
+    cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", confidence_alert_levels=stored)
+    assert cfg.minimum_confidence.value == minimum
+    assert "confidence_alert_levels" not in cfg.dict()
+
+
+def test_new_field_wins_over_the_old_level_list():
+    cfg = PullFireDetectionsConfig(
+        region="Europe", spatial_feature_group="g1", confidence_alert_levels=["low"], minimum_confidence="high"
+    )
+    assert cfg.minimum_confidence.value == "high"
+
+
+@pytest.mark.parametrize("stored", [[], None, ["certain"], "nominal"])
+def test_an_unusable_old_level_list_falls_back_to_the_default(stored):
+    cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", confidence_alert_levels=stored)
+    assert cfg.minimum_confidence.value == "nominal"
