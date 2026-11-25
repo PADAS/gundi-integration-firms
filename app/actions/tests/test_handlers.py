@@ -91,6 +91,7 @@ def env(mocker):
         log=mocker.patch.object(handlers, "log_action_activity", new=AsyncMock()),
         check=mocker.patch.object(handlers, "check_app_key", new=AsyncMock(return_value=True)),
         shared_key=mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", None),
+        shared_key_file=mocker.patch.object(handlers.settings, "FIRMS_APP_KEY_FILE", None),
         ensure=mocker.patch.object(
             handlers, "ensure_event_type_on_destinations", new=AsyncMock(return_value=EventTypeCheck())
         ),
@@ -321,6 +322,64 @@ async def test_own_key_wins_over_the_shared_key(env, run, mocker):
     mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", "shared-key")
     await run([])
     assert env.fetch.await_args_list[0].kwargs["app_key"] == "the-key"
+
+
+@pytest.fixture
+def key_file(tmp_path, mocker):
+    path = tmp_path / "firms-app-key"
+    mocker.patch.object(handlers.settings, "FIRMS_APP_KEY_FILE", str(path))
+    return path
+
+
+async def test_shared_key_is_read_from_its_file(env, run, integration, key_file, mocker):
+    mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", "key-from-the-environment")
+    key_file.write_text("key-from-the-file\n")
+    integration.configurations = []
+    await run([])
+    assert env.fetch.await_args_list[0].kwargs["app_key"] == "key-from-the-file"
+
+
+async def test_a_replaced_key_file_is_used_by_the_next_run(env, run, integration, key_file):
+    integration.configurations = []
+    key_file.write_text("first-key")
+    await run([])
+    key_file.write_text("second-key")
+    await run([])
+    assert [call.kwargs["app_key"] for call in env.fetch.await_args_list][0::2] == ["first-key", "second-key"]
+
+
+async def test_own_key_wins_over_the_key_file(env, run, key_file):
+    key_file.write_text("key-from-the-file")
+    await run([])
+    assert env.fetch.await_args_list[0].kwargs["app_key"] == "the-key"
+
+
+@pytest.mark.parametrize("content", [None, "", " \n"])
+async def test_an_unreadable_or_empty_key_file_is_an_auth_error_that_says_so(
+    env, run, integration, key_file, mocker, content
+):
+    """The key in the environment is not used instead: it is the one the file was meant to replace."""
+    mocker.patch.object(handlers.settings, "FIRMS_APP_KEY", "key-from-the-environment")
+    if content is not None:
+        key_file.write_text(content)
+    integration.configurations = []
+    with pytest.raises(IntegrationAuthError) as raised:
+        await run([])
+    assert "could not be read" in raised.value.message and str(key_file) not in raised.value.message
+    assert env.fetch.await_count == 0
+
+
+async def test_action_auth_checks_the_key_from_the_file(env, integration, key_file):
+    key_file.write_text("key-from-the-file\n")
+    result = await handlers.action_auth(integration=integration, action_config=AuthenticateConfig())
+    assert result == {"valid_credentials": True}
+    env.check.assert_awaited_once_with("key-from-the-file")
+
+
+async def test_action_auth_reports_an_unreadable_key_file(env, integration, key_file):
+    result = await handlers.action_auth(integration=integration, action_config=AuthenticateConfig())
+    assert result["valid_credentials"] is False and "could not be read" in result["error"]
+    assert env.check.await_count == 0
 
 
 @pytest.mark.parametrize("auth_data", [None, {}, {"use_own_key": True}])

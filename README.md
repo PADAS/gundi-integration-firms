@@ -9,8 +9,8 @@ record of the events it sent, so a fire is not raised again when NASA revises or
 
 ## Setting it up
 
-1. **App key.** Nothing to do by default: the service uses a shared NASA Earthdata app key, set in its
-   `FIRMS_APP_KEY` environment variable. To use your own, turn on "Use your own key" in the Authentication
+1. **App key.** Nothing to do by default: the service uses a shared NASA Earthdata app key (see
+   [The shared app key](#the-shared-app-key)). To use your own, turn on "Use your own key" in the Authentication
    action and enter it. Generate one at https://nrt3.modaps.eosdis.nasa.gov/, under the Profile menu.
 2. **Connect an EarthRanger destination.** Events go there, and the boundary is read from there.
 3. **Configure Pull Fire Detections:**
@@ -55,6 +55,26 @@ logged whenever a run falls back from the live read.
 
 Only events. Each has the title "FIRMS Fire Detected", the acquisition time, and a location rounded to three
 decimal places (about 110 m). Only rows with processing level `NRT` are used.
+
+## The shared app key
+
+Integrations that do not use their own key share one NASA Earthdata app key. In a deployment it lives in the
+`firms-app-key` secret in Secret Manager, which is mounted into the service as a file. The service is told where
+the file is by its `FIRMS_APP_KEY_FILE` environment variable, and reads it at the start of every run.
+
+**To replace the key,** add a new version to the secret in each environment's project. Nothing is redeployed or
+restarted: the next run, at most 15 minutes later, uses the new key.
+
+```bash
+read -rs KEY && printf %s "$KEY" | gcloud secrets versions add firms-app-key --project <project> --data-file=-
+```
+
+To confirm it worked, run the Authentication action's test in the portal, or look at the next run in the
+activity log: a key that NASA does not accept shows up there as "NASA Earthdata rejected the app key", and a key
+file that is missing or empty as "The shared NASA Earthdata app key could not be read".
+
+When running locally, set `FIRMS_APP_KEY` to the key itself instead. It is ignored when `FIRMS_APP_KEY_FILE` is
+set.
 
 Design: `docs/superpowers/specs/2026-11-23-firms-pull-design.md`.
 
