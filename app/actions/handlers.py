@@ -54,14 +54,40 @@ def _utcnow() -> datetime:
 
 
 NO_APP_KEY_MESSAGE = "No shared NASA Earthdata app key is available. Turn on 'Use your own key' and enter one."
+UNREADABLE_SHARED_KEY_MESSAGE = (
+    "The shared NASA Earthdata app key could not be read. Try again later, or turn on 'Use your own key' and enter one."
+)
+
+
+def _shared_app_key() -> Optional[str]:
+    """The deployment's shared key, or None when it has none.
+
+    The key file is read on every call and never cached: it is a mounted secret that always holds the newest
+    version, which is how a replaced key reaches a running service. When a file is configured, the key in the
+    environment is not used instead, because that is the key the file was meant to replace.
+    """
+    if not settings.FIRMS_APP_KEY_FILE:
+        return settings.FIRMS_APP_KEY or None
+    try:
+        with open(settings.FIRMS_APP_KEY_FILE, encoding="utf-8") as key_file:
+            key = key_file.read().strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        # Neither the path nor the error text goes into a message a portal user reads.
+        logger.error("Could not read the shared app key file: %s", type(exc).__name__)
+        raise IntegrationAuthError(UNREADABLE_SHARED_KEY_MESSAGE)
+    if not key:
+        logger.error("The shared app key file is empty.")
+        raise IntegrationAuthError(UNREADABLE_SHARED_KEY_MESSAGE)
+    return key
 
 
 def _app_key(auth_config: AuthenticateConfig) -> str:
     """The integration's own key when it uses one, otherwise the deployment's shared key."""
     if auth_config.use_own_key:
         return auth_config.app_key.get_secret_value()
-    if settings.FIRMS_APP_KEY:
-        return settings.FIRMS_APP_KEY
+    shared_key = _shared_app_key()
+    if shared_key:
+        return shared_key
     raise IntegrationAuthError(NO_APP_KEY_MESSAGE)
 
 
@@ -69,8 +95,8 @@ def _app_key(auth_config: AuthenticateConfig) -> str:
 async def action_auth(integration, action_config: AuthenticateConfig):
     try:
         valid = await check_app_key(_app_key(action_config))
-    except IntegrationAuthError:
-        return {"valid_credentials": False, "error": NO_APP_KEY_MESSAGE}
+    except IntegrationAuthError as exc:
+        return {"valid_credentials": False, "error": exc.message}
     except FirmsFetchError:
         return {"valid_credentials": False, "error": "Could not reach NASA FIRMS to check the app key."}
     if not valid:
