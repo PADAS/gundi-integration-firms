@@ -81,6 +81,11 @@ class AuthenticateConfig(AuthActionConfiguration, ExecutableActionMixin):
         return values
 
 
+# NASA publishes a detection hours after the satellite pass, and the action runs hourly: a shorter window would drop
+# detections before any run had seen them.
+MINIMUM_ALERT_WINDOW_HOURS = 6
+
+
 class PullFireDetectionsConfig(PullActionConfiguration):
     region: FirmsRegion = FieldWithUIOptions(
         ...,
@@ -122,8 +127,8 @@ class PullFireDetectionsConfig(PullActionConfiguration):
     alert_window_hours: int = FieldWithUIOptions(
         24,
         title="Alert window (hours)",
-        description="Detections older than this are not reported.",
-        ge=1,
+        description="Detections older than this are not reported. At least 6 hours.",
+        ge=MINIMUM_ALERT_WINDOW_HOURS,
         le=168,
     )
     priority_low: EventPriority = FieldWithUIOptions(
@@ -192,6 +197,15 @@ class PullFireDetectionsConfig(PullActionConfiguration):
     def reported_confidence_levels(self) -> Set[str]:
         """The FIRMS confidence values that are reported: the minimum and every level above it."""
         return set(CONFIDENCE_ORDER[CONFIDENCE_ORDER.index(self.minimum_confidence.value):])
+
+    @validator("alert_window_hours", pre=True)
+    def _read_a_window_saved_before_the_minimum(cls, value):
+        """Windows from 1 hour up were allowed once. Read those as the minimum rather than refusing to run."""
+        try:
+            hours = float(value)
+        except (TypeError, ValueError):
+            return value
+        return MINIMUM_ALERT_WINDOW_HOURS if 1 <= hours < MINIMUM_ALERT_WINDOW_HOURS else value
 
     @validator("red_frp_threshold_mw", pre=True)
     def _read_a_threshold_saved_before_the_slider(cls, value):

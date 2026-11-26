@@ -187,3 +187,17 @@ def test_new_field_wins_over_the_old_level_list():
 def test_an_unusable_old_level_list_falls_back_to_the_default(stored):
     cfg = PullFireDetectionsConfig(region="Europe", spatial_feature_group="g1", confidence_alert_levels=stored)
     assert cfg.minimum_confidence.value == "nominal"
+
+
+@pytest.mark.parametrize("hours", [6, 24, 168])
+def test_alert_window_accepts_six_hours_and_up(hours):
+    assert PullFireDetectionsConfig(region="Global", spatial_feature_group="g1", alert_window_hours=hours).alert_window_hours == hours
+
+
+@pytest.mark.parametrize("hours", [1, 3, 5, "2"])
+def test_a_shorter_alert_window_saved_earlier_is_read_as_six_hours(hours):
+    assert PullFireDetectionsConfig(region="Global", spatial_feature_group="g1", alert_window_hours=hours).alert_window_hours == 6
+
+
+def test_the_portal_form_offers_no_alert_window_under_six_hours():
+    assert PullFireDetectionsConfig.schema()["properties"]["alert_window_hours"]["minimum"] == 6

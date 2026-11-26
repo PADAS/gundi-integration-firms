@@ -7,7 +7,7 @@ from gundi_core.events import LogLevel
 
 from app import settings
 from app.services.action_scheduler import crontab_schedule
-from app.services.activity_logger import activity_logger, log_action_activity
+from app.services.activity_logger import log_action_activity
 from app.services.errors import IntegrationAuthError, IntegrationBadResponseError, IntegrationConnectionError
 from app.services.gundi import send_events_to_gundi
 from app.services.state import IntegrationStateManager
@@ -157,9 +157,8 @@ async def _ensure_event_type(integration_id: str) -> None:
 
 @action_title("Pull Fire Detections")
 @crontab_schedule("0 * * * *")
-# The decorator's start and completion records each carry the whole configuration, so only its failure record is
-# kept; a run writes one completion record of its own, with the result alone.
-@activity_logger(on_start=False, on_completion=False)
+# Not wrapped in the template's activity_logger: its records each carry the whole configuration, and the runner
+# already records a failure. A run writes one completion record of its own, with the result alone.
 async def action_pull_fire_detections(integration, action_config: PullFireDetectionsConfig):
     integration_id = str(integration.id)
     result = await _run_unless_another_is_running(integration, integration_id, action_config)

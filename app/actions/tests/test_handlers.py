@@ -514,10 +514,9 @@ async def test_a_skipped_run_still_logs_its_completion(env, run):
     assert [c.kwargs["data"] for c in env.log.await_args_list if c.kwargs["title"] == COMPLETED] == [result]
 
 
-async def test_a_failed_run_logs_the_failure_and_no_completion(env, run):
+async def test_a_failed_run_logs_nothing_itself(env, run):
     env.fetch.side_effect = FirmsAuthError("no")
     with pytest.raises(IntegrationAuthError):
         await run(None)
-    assert env.publish.await_count == 1
-    assert env.publish.await_args.kwargs["event"].event_type == "IntegrationActionFailed"
+    assert env.publish.await_count == 0  # the runner writes the one failure record
     assert COMPLETED not in [c.kwargs["title"] for c in env.log.await_args_list]
