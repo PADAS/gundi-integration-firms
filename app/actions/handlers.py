@@ -156,11 +156,24 @@ async def _ensure_event_type(integration_id: str) -> None:
 
 
 @action_title("Pull Fire Detections")
-@crontab_schedule("*/15 * * * *")
-@activity_logger()
+@crontab_schedule("0 * * * *")
+# The decorator's start and completion records each carry the whole configuration, so only its failure record is
+# kept; a run writes one completion record of its own, with the result alone.
+@activity_logger(on_start=False, on_completion=False)
 async def action_pull_fire_detections(integration, action_config: PullFireDetectionsConfig):
     integration_id = str(integration.id)
+    result = await _run_unless_another_is_running(integration, integration_id, action_config)
+    await log_action_activity(
+        integration_id=integration_id,
+        action_id=PULL_ACTION_ID,
+        title=f"Action '{PULL_ACTION_ID}' completed.",
+        level=LogLevel.INFO,
+        data=result,
+    )
+    return result
 
+
+async def _run_unless_another_is_running(integration, integration_id: str, action_config: PullFireDetectionsConfig):
     # Two runs working from the same stored cursors and sent-event record would both send the same detections.
     if not await state_manager.set_if_absent(integration_id, RUN_LOCK_ID, ttl_seconds=RUN_LOCK_TTL_SECONDS):
         return {"skipped": "another run is in progress"}
