@@ -2,7 +2,7 @@
 
 Sends NASA FIRMS fire detections to Gundi as `firms_rep` events. It replaces EarthRanger's built-in FIRMS plugin.
 
-Every 15 minutes the `pull_fire_detections` action reads yesterday's and today's VIIRS near-real-time day files
+Every hour, on the hour, the `pull_fire_detections` action reads yesterday's and today's VIIRS near-real-time day files
 for the configured region, keeps the detections that fall inside the site's boundary, and sends one event per
 detection that is confident and recent enough. It resumes each day file where the last run stopped and keeps a
 record of the events it sent, so a fire is not raised again when NASA revises or re-publishes a detection.
@@ -22,7 +22,7 @@ record of the events it sent, so a fire is not raised again when NASA revises or
 | Spatial feature group | The EarthRanger feature group whose polygons form the boundary. |
 | Fallback area | A drawn or imported polygon, used when the feature group can't be read. |
 | Minimum confidence | Detections with this FIRMS confidence or higher are reported: low, nominal (default) or high. |
-| Alert window (hours) | Detections older than this are not reported. Defaults to 24. |
+| Alert window (hours) | Detections older than this are not reported. Defaults to 24; the minimum is 6. |
 | Priority for low / nominal / high confidence | The event priority (gray, green, amber or red) for each confidence level. Defaults to gray, green and amber. |
 | Red priority at fire radiative power | Detections at or above this fire radiative power are red, whatever their confidence: 50 (default), 75, 100 or 200 MW. Few detections reach 200 MW, so choose it to keep red rare. |
 
@@ -63,7 +63,7 @@ Integrations that do not use their own key share one NASA Earthdata app key. In 
 the file is by its `FIRMS_APP_KEY_FILE` environment variable, and reads it at the start of every run.
 
 **To replace the key,** add a new version to the secret in each environment's project. Nothing is redeployed or
-restarted: the next run, at most 15 minutes later, uses the new key.
+restarted: the next run, at most an hour later, uses the new key.
 
 ```bash
 read -rs KEY && printf %s "$KEY" | gcloud secrets versions add firms-app-key --project <project> --data-file=-

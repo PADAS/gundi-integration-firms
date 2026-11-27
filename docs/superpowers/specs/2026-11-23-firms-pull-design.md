@@ -90,7 +90,7 @@ forward them.
 - **Run summary:** counters for files read, records read, skipped levels,
   malformed lines, header errors, resume resets, files not found, fetch errors,
   outside area, events created, events de-duplicated.
-- **Schedule:** every 15 minutes.
+- **Schedule:** every hour, on the hour. *(Was every 15 minutes until 2026-11-25, changed to cut activity-log volume.)*
 - **Regions:** Alaska, Australia_NewZealand, Canada, Central_America, Europe,
   Global, Northern_and_Central_Africa, Russia_Asia, SouthEast_Asia,
   South_America, South_Asia, Southern_Africa, USA_contiguous_and_Hawaii.
@@ -150,7 +150,7 @@ which boundary was used and why.
   JSON string. No MultiPolygon.
 - `confidence_alert_levels`: multi-select of low / nominal / high, default
   nominal and high.
-- `alert_window_hours`: default 24.
+- `alert_window_hours`: default 24, minimum 6 (shorter saved values are read as 6).
 - Validation: at least one of `spatial_feature_group` or `fallback_area`.
 
 Not exposed, fixed at the plugin's defaults *(my call)*: accepted processing
@@ -168,7 +168,8 @@ levels (`NRT` only), unknown levels skipped, de-dupe precision of 3 decimals.
   (token, username and password), following `_build_er_client` in
   `gundi-integration-earthranger`. *(my call; Africam's helper is token only.)*
 - `app/actions/handlers.py`: `action_auth` and `action_pull_fire_detections`,
-  the latter with `@crontab_schedule("*/15 * * * *")` and `@activity_logger()`.
+  the latter with `@crontab_schedule("0 * * * *")` and no `@activity_logger()`: it
+  writes one completion record per run, with the result and no configuration.
   Retry, fallback and de-dupe orchestration live here. The run's counters go in
   the action result so they show in the portal.
 - `app/actions/configurations.py`: the models above.

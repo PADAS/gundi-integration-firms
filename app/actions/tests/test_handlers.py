@@ -67,6 +67,14 @@ class FakeStateManager:
         return self.docs.setdefault("pull_fire_detections", {})
 
 
+COMPLETED = "Action 'pull_fire_detections' completed."
+
+
+def warnings_and_notes(env):
+    """What a run logged besides its completion record."""
+    return [c for c in env.log.await_args_list if c.kwargs["title"] != COMPLETED]
+
+
 @pytest.fixture
 def integration():
     auth = SimpleNamespace(action=SimpleNamespace(value="auth"), data={"use_own_key": True, "app_key": "the-key"})
@@ -75,12 +83,13 @@ def integration():
 
 @pytest.fixture
 def env(mocker):
-    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+    publish = mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
     mocker.patch.object(handlers, "_utcnow", return_value=NOW)
     fake = FakeStateManager()
     mocker.patch.object(handlers, "state_manager", fake)
     return SimpleNamespace(
         fake=fake,
+        publish=publish,
         resolve=mocker.patch.object(
             handlers,
             "resolve_boundary",
@@ -206,9 +215,9 @@ async def test_no_boundary_sends_nothing_and_warns(env, run):
     result = await run([rec(0.5, 0.5, 1)])
     assert result == {"skipped": "no boundary", "events_sent": 0}
     assert env.fetch.await_count == 0 and env.send.await_count == 0
-    titles = [c.kwargs["title"] for c in env.log.await_args_list]
+    titles = [c.kwargs["title"] for c in warnings_and_notes(env)]
     assert titles == ["x", "No boundary available for FIRMS; nothing was sent."]
-    assert all(c.kwargs["level"] == LogLevel.WARNING for c in env.log.await_args_list)
+    assert all(c.kwargs["level"] == LogLevel.WARNING for c in warnings_and_notes(env))
     assert LOCK in env.fake.deleted
 
 
@@ -217,8 +226,9 @@ async def test_fallback_boundary_logs_each_warning_and_saves_cache(env, run):
     env.resolve.return_value = ResolvedBoundary(UNIT_SQUARE, "cached", ["ER unreachable"], cache)
     result = await run([])
     assert env.fake.state["boundary_cache"] == cache and result["boundary_source"] == "cached"
-    assert [c.kwargs["title"] for c in env.log.await_args_list] == ["ER unreachable"]
-    assert env.log.await_args.kwargs["level"] == LogLevel.WARNING
+    assert [(c.kwargs["title"], c.kwargs["level"]) for c in warnings_and_notes(env)] == [
+        ("ER unreachable", LogLevel.WARNING)
+    ]
 
 
 async def test_stored_boundary_cache_is_passed_to_the_resolver(env, run):
@@ -444,7 +454,7 @@ async def test_event_type_is_not_checked_when_nothing_is_sent(env, run):
 async def test_created_event_type_and_warnings_are_logged(env, run):
     env.ensure.return_value = EventTypeCheck(created=["a.pamdas.org"], warnings=["could not check b"])
     result = await run([rec(0.5, 0.5, 1)])
-    logged = [(c.kwargs["title"], c.kwargs["level"]) for c in env.log.await_args_list]
+    logged = [(c.kwargs["title"], c.kwargs["level"]) for c in warnings_and_notes(env)]
     assert logged == [
         ("Created the 'firms_rep' event type on a.pamdas.org.", LogLevel.INFO),
         ("could not check b", LogLevel.WARNING),
@@ -483,5 +493,30 @@ async def test_fire_below_the_chosen_threshold_keeps_its_confidence_priority(env
 
 async def test_schedule_and_discovery():
     assert set(get_actions()) == {"auth", "pull_fire_detections"}
-    assert handlers.action_pull_fire_detections.crontab_schedule.minute == "*/15"
+    assert handlers.action_pull_fire_detections.crontab_schedule.minute == "0"
     assert handlers.action_pull_fire_detections.crontab_schedule.hour == "*"
+
+
+async def test_a_run_logs_one_completion_record_with_its_result_and_no_config(env, run):
+    result = await run([rec(0.5, 0.5, 1)])
+    assert env.publish.await_count == 0  # no "started" record, and none carrying the configuration
+    (completion,) = [c for c in env.log.await_args_list if c.kwargs["title"] == COMPLETED]
+    assert completion.kwargs["integration_id"] == INTEGRATION_ID
+    assert completion.kwargs["action_id"] == "pull_fire_detections"
+    assert completion.kwargs["level"] == LogLevel.INFO
+    assert completion.kwargs["data"] == result
+    assert "config_data" not in completion.kwargs
+
+
+async def test_a_skipped_run_still_logs_its_completion(env, run):
+    env.fake.lock_free = False
+    result = await run([rec(0.5, 0.5, 1)])
+    assert [c.kwargs["data"] for c in env.log.await_args_list if c.kwargs["title"] == COMPLETED] == [result]
+
+
+async def test_a_failed_run_logs_nothing_itself(env, run):
+    env.fetch.side_effect = FirmsAuthError("no")
+    with pytest.raises(IntegrationAuthError):
+        await run(None)
+    assert env.publish.await_count == 0  # the runner writes the one failure record
+    assert COMPLETED not in [c.kwargs["title"] for c in env.log.await_args_list]
